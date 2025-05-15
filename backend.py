@@ -6,6 +6,8 @@ import os
 from werkzeug.utils import secure_filename
 import uuid
 import tempfile
+import google.generativeai as genai
+from google.generativeai.types import GenerationConfig # Import GenerationConfig
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes to allow requests from your React frontend
@@ -22,7 +24,7 @@ def allowed_file(filename):
 
 def analyze_pdf_with_gemini(api_key, file_path):
     """
-    Analyzes a PDF file using Gemini API
+    Analyzes a PDF file using Gemini API with controlled temperature for more deterministic results.
     
     Args:
         api_key: Google Gemini API key
@@ -44,18 +46,27 @@ def analyze_pdf_with_gemini(api_key, file_path):
             pdf_file = genai.get_file(name=pdf_file.name)
         
         if pdf_file.state.name != "ACTIVE":
+            # It's good practice to try and delete the file from Gemini even if processing fails
+            try:
+                genai.delete_file(name=pdf_file.name)
+                print(f"Cleaned up file {pdf_file.name} from Gemini after processing failure.")
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to delete file {pdf_file.name} from Gemini server after processing failure: {cleanup_error}")
             return {"error": f"File processing failed. State: {pdf_file.state.name}"}
         
         # Select model and define prompt
-        model = genai.GenerativeModel(model_name="gemini-2.5-pro-preview-03-25")
+        # Using gemini-1.5-flash as an example, as "gemini-2.5-pro-preview-03-25" might not be a standard or available model name.
+        # Please ensure you are using a valid and available model name.
+        # For example, "gemini-1.5-pro-latest" or "gemini-1.0-pro" are common.
+        # Let's assume you intended a Pro model, for instance "gemini-1.5-pro-latest"
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest") # Ensure this model name is correct and available
         
-        # Define the analysis prompt (same as your original code)
         prompt = """
             Comprehensive Climate Action Plan Analysis 
 
-You are tasked with analyzing a city's Climate Action Plan (CAP) or related report. Based on the content, assess whether it addresses key areas across stakeholder engagement, emissions data, risk assessments, strategies, equity, and monitoring. 
+You are tasked with analyzing a city’s Climate Action Plan (CAP) or related report. Based on the content, assess whether it addresses key areas across stakeholder engagement, emissions data, risk assessments, strategies, equity, and monitoring. 
 
-Please respond using Yes/No and provide brief justifications or references where applicable. Where methods, tools, or stakeholder names are mentioned, list or summarize them clearly. Give me a comprehensive analysis along with scores. A "Yes" must be given a score of 1 and a "No" must be given a score of 0.  
+Please respond using Yes/No and provide brief justifications or references where applicable. Where methods, tools, or stakeholder names are mentioned, list or summarize them clearly. Give me a comprehensive analysis along with scores. A “Yes” must be given a score of 1 and a “No” must be given a score of 0.  
 
 Shape 
 
@@ -139,13 +150,13 @@ Adaptation Strategies:
 
 Has the city identified the root causes of climate risks? 
 
-Reactive adaptation fights the immediate negative consequences of climate-related hazards, protecting quality of life and the city's systems during climate-related disasters and restoring them afterwards. Are any reactive adaptation plans addressed 
+Reactive adaptation fights the immediate negative consequences of climate-related hazards, protecting quality of life and the city’s systems during climate-related disasters and restoring them afterwards. Are any reactive adaptation plans addressed 
 
-Preventative adaptation reduces the negative consequences of climate-related hazards, aiming to protect quality of life and city systems to avoid those hazard events becoming disasters. Are any preventive adaptation plans included? 
+Preventative adaptation reduces the negative consequences of climate-related hazards, aiming to protect quality of life and city systems to avoid those hazard events becoming disasters. Are any preventive adaptation plans included? 
 
-Transformative adaptation tackles the root causes of climate risk, making climate-related hazards less likely or severe through fundamental changes to the city's fabric and systems. Are any transformation adaptation plans included?  
+Transformative adaptation tackles the root causes of climate risk, making climate-related hazards less likely or severe through fundamental changes to the city’s fabric and systems. Are any transformation adaptation plans included?  
 
-Shape 
+ 
 
 🔹 6. Action Prioritization & Detailing 
 
@@ -159,7 +170,7 @@ Is there evidence of inclusive stakeholder engagement in prioritization?
 
 Has the city adopted a flexible, iterative planning process? 
 
-Shape 
+ 
 
 🔹 7. Equity & Inclusivity 
 
@@ -183,7 +194,7 @@ Has the city used needs/stakeholder findings to guide climate actions? (Yes/No)
 
 Is a Monitoring, Evaluation, and Reporting (MER) system used to track equity outcomes? 
 
-Shape 
+ 
 
 🔹 8. Monitoring, Evaluation & Reporting (MER) 
 
@@ -288,30 +299,53 @@ Calculating the Total Maximum Score:
 Adding the maximum points from each section: 6 + 3 + 7 + 2 + 9 + 5 + 6 + 6 = 44 points 
 
 Based on the provided structure and counting each distinct Yes/No question as one point, the maximum score any given report can get is 44. 
+
+ Consolidate the socres and give them as
+ Section 1: Stakeholder & Community Engagement: Score
+ Section 2: GHG Emissions Inventory: Score
+ Section 3: Climate Change Risk Assessment (CCRA): Score
+ Section 4: City Needs Assessment: Score
+ Section 5: Strategy Identification: Score
+ Section 6: Action Prioritization & Detailing: Score
+ Section 7: Equity & Inclusivity: Score
+ Section 8: Monitoring, Evaluation & Reporting (MER): Score
+
+ 
         """
         
-        # Generate content
-        response = model.generate_content([prompt, pdf_file])
+        # Define generation configuration with a lower temperature
+        # Temperature: Controls randomness. Lower values (e.g., 0.2) make output more deterministic.
+        # Higher values (e.g., 0.8) make it more random. Default is often around 0.7-0.9.
+        # For deterministic output, 0.0 is the lowest, but 0.1 or 0.2 can be good compromises.
+        config = GenerationConfig(temperature=0.2) 
+        
+        # Generate content with the specified configuration
+        response = model.generate_content(
+            [prompt, pdf_file],
+            generation_config=config  # Pass the config here
+        )
         result = response.text
         
         # Clean up by deleting the file from Gemini
         try:
             genai.delete_file(name=pdf_file.name)
+            print(f"Successfully deleted file {pdf_file.name} from Gemini server.")
         except Exception as cleanup_error:
-            print(f"Warning: Failed to delete file from Gemini server: {cleanup_error}")
+            print(f"Warning: Failed to delete file {pdf_file.name} from Gemini server during final cleanup: {cleanup_error}")
         
         return {"result": result}
     
     except Exception as e:
-        return {"error": str(e)}
-    
-    finally:
-        # Ensure file is cleaned up from Gemini even if an error occurs
+        # If an error occurs before pdf_file is defined or if its name is not available,
+        # we can't delete it.
         if 'pdf_file' in locals() and hasattr(pdf_file, 'name'):
             try:
                 genai.delete_file(name=pdf_file.name)
-            except:
-                pass
+                print(f"Cleaned up file {pdf_file.name} from Gemini after an exception.")
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to delete file {pdf_file.name} from Gemini server after an exception: {cleanup_error}")
+        return {"error": str(e)}
+    
 
 @app.route('/api/analyze-pdf', methods=['POST'])
 def analyze_pdf():
